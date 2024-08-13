@@ -1,7 +1,7 @@
 module Main where
 
 import Control.Monad
-import Control.Monad.Except
+import Control.Monad.Cont
 import Control.Monad.Trans
 import Control.Lens
 import Data.ByteString.Lens
@@ -26,21 +26,19 @@ main = do
     basepath <- view (pre _head . non ".") <$> getArgs
 
     putStrLn "Server is running on port 1509"
-    run 1509 $ \req resp -> do
-        runExceptT >=> resp . either id id $ do
+    run 1509 $ \req resp -> flip runContT resp $ do
+        callCC $ \exit -> do
             let target = joinPath $ pathInfo req ^.. traverse . unpacked
                 path = basepath </> target
 
             exists <- liftIO $ doesPathExist path
-            unless exists $ throwError $ responseLBS notFound404 [] $ "No such file or directory" ^. packedChars
+            unless exists $ exit $ responseLBS notFound404 [] $ "No such file or directory" ^. packedChars
 
             dir <- liftIO $ doesDirectoryExist path
             if dir then do
-                liftIO $ print path
-                forM_ (map (path</>) indexFiles) $ \indexPath -> do
-                    liftIO $ print indexPath
+                forMOf_ (traverse . to (path</>)) indexFiles $ \indexPath -> do
                     exists <- liftIO $ doesPathExist indexPath
-                    when exists $ throwError $ responseFile ok200 [] indexPath Nothing
+                    when exists $ exit $ responseFile ok200 [] indexPath Nothing
 
                 files <- liftIO $ listDirectory path
                 pure $ responseLBS ok200 [] $ files ^. traverse . to (renderLink target) . packedChars
